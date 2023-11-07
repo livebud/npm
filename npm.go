@@ -59,10 +59,16 @@ func install(ctx context.Context, dir string, pkgname string) error {
 		fileInfo := header.FileInfo()
 		dir := filepath.Join(pkg.Dir(dir), rootless(filepath.Dir(header.Name)))
 		filename := filepath.Join(dir, fileInfo.Name())
+		if fileInfo.IsDir() {
+			if err := os.MkdirAll(filename, fileInfo.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
 		if err = os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
-		file, err := os.Create(filename)
+		file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode())
 		if err != nil {
 			return err
 		}
@@ -77,22 +83,27 @@ func install(ctx context.Context, dir string, pkgname string) error {
 }
 
 func resolvePkg(pkgname string) (resolved *pkg, err error) {
-	parts := strings.Split(pkgname, "@")
-	name := parts[0]
-	version := ""
-	if len(parts) >= 2 {
-		version = parts[1]
+	index := strings.LastIndex(pkgname, "@")
+	if index == -1 {
+		return nil, fmt.Errorf("npm: unable to install %[1]s because it's missing the version (e.g. %[1]s@1.0.0)", pkgname)
+	}
+	name, version := pkgname[:index], pkgname[index+1:]
+	scope := ""
+	index = strings.LastIndex(name, "/")
+	if index != -1 {
+		scope, name = name[:index], name[index+1:]
 	}
 	if version == "" {
 		return nil, fmt.Errorf("npm: unable to install %[1]s because it's missing the version (e.g. %[1]s@1.0.0)", pkgname)
 	} else if version == "latest" {
 		return nil, fmt.Errorf("npm: unable to install %[1]s because tagged versions aren't supported yet", pkgname)
 	}
-	return newPkg(name, version), nil
+	return newPkg(scope, name, version), nil
 }
 
-func newPkg(name, version string) *pkg {
+func newPkg(scope, name, version string) *pkg {
 	return &pkg{
+		Scope:        scope,
 		Name:         name,
 		Version:      version,
 		Dependencies: map[string]string{},
@@ -100,6 +111,7 @@ func newPkg(name, version string) *pkg {
 }
 
 type pkg struct {
+	Scope           string            `json:"scope,omitempty"`
 	Name            string            `json:"name,omitempty"`
 	Version         string            `json:"version,omitempty"`
 	Dependencies    map[string]string `json:"dependencies"`
@@ -107,11 +119,17 @@ type pkg struct {
 }
 
 func (p *pkg) URL() string {
-	return fmt.Sprintf(`https://registry.npmjs.org/%[1]s/-/%[1]s-%[2]s.tgz`, p.Name, p.Version)
+	if p.Scope == "" {
+		return fmt.Sprintf(`https://registry.npmjs.org/%[1]s/-/%[1]s-%[2]s.tgz`, p.Name, p.Version)
+	}
+	return fmt.Sprintf(`https://registry.npmjs.org/%[1]s/%[2]s/-/%[2]s-%[3]s.tgz`, p.Scope, p.Name, p.Version)
 }
 
 func (p *pkg) Dir(root string) string {
-	return filepath.Join(root, "node_modules", p.Name)
+	if p.Scope == "" {
+		return filepath.Join(root, "node_modules", p.Name)
+	}
+	return filepath.Join(root, "node_modules", p.Scope, p.Name)
 }
 
 func rootless(fpath string) string {

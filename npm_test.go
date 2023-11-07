@@ -37,3 +37,12 @@ func TestInstallReact(t *testing.T) {
 	exists(t, filepath.Join(dir, "node_modules", "react", "package.json"))
 	exists(t, filepath.Join(dir, "node_modules", "react-dom", "package.json"))
 }
+
+func TestInstallStripe(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	err := npm.Install(ctx, dir, "@stripe/stripe-js@2.1.11")
+	is.NoErr(err)
+	exists(t, filepath.Join(dir, "node_modules", "@stripe", "stripe-js", "package.json"))
+}
