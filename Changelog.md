@@ -1,3 +1,7 @@
+# 0.0.3 / 2024-02-12
+
+- add 'npm pack'-like support for installing from local directories
+
 # 0.0.2 / 2023-11-06
 
 - add support for scoped node modules. closes: #1
