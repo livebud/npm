@@ -77,7 +77,7 @@ func equals(t testing.TB, path string, expected string) {
 	}
 }
 
-func TestInstallLocal(t *testing.T) {
+func TestLocal(t *testing.T) {
 	is := is.New(t)
 	dir := t.TempDir()
 	pkgDir := t.TempDir()
@@ -88,7 +88,10 @@ func TestInstallLocal(t *testing.T) {
 			"browser": "./browser.ts",
 			"files": [
 				"src/"
-			]
+			],
+			"dependencies": {
+				"uid": "2.0.0"
+			}
 		}`,
 		"browser.ts":                    `export const browser = "browser"`,
 		"main.ts":                       `export const main = "main"`,
@@ -115,6 +118,7 @@ func TestInstallLocal(t *testing.T) {
 	notExists(t, filepath.Join(dir, "node_modules", "bud", "src", ".git"))
 	notExists(t, filepath.Join(dir, "node_modules", "bud", "node_modules"))
 	notExists(t, filepath.Join(dir, "node_modules", "bud", ".gitignore"))
+	exists(t, filepath.Join(dir, "node_modules", "uid", "package.json"))
 }
 
 func TestDepOfDep(t *testing.T) {
@@ -126,4 +130,13 @@ func TestDepOfDep(t *testing.T) {
 	exists(t, filepath.Join(dir, "node_modules", "preact-render-to-string", "package.json"))
 	// pretty-format is a dependency of preact-render-to-string
 	exists(t, filepath.Join(dir, "node_modules", "pretty-format", "package.json"))
+}
+
+func TestScoped(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	err := npm.Install(ctx, dir, "@lukeed/uuid@^2.0.1")
+	is.NoErr(err)
+	exists(t, filepath.Join(dir, "node_modules", "@lukeed", "uuid", "package.json"))
 }

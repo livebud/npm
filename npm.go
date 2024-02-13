@@ -62,10 +62,9 @@ func resolvePackage(pkgname string) (installable, error) {
 	}
 	if version == "" {
 		return nil, fmt.Errorf("npm: unable to install %[1]s because it's missing the version (e.g. %[1]s@1.0.0)", pkgname)
+	} else if version == "latest" {
+		return nil, fmt.Errorf("npm: unable to install %[1]s because tagged versions aren't supported yet", pkgname)
 	}
-	// else if version == "latest" {
-	// 	return nil, fmt.Errorf("npm: unable to install %[1]s because tagged versions aren't supported yet", pkgname)
-	// }
 	version, err := resolveVersion(scope, name, version)
 	if err != nil {
 		return nil, err
@@ -174,7 +173,11 @@ func resolveVersion(scope, name, version string) (string, error) {
 	if version == "latest" {
 		return "latest", nil
 	}
-	req, err := http.NewRequest("GET", fmt.Sprintf(`https://registry.npmjs.org/%s/%s`, scope, name), nil)
+	pkgName := name
+	if scope != "" {
+		pkgName = fmt.Sprintf("%s/%s", scope, name)
+	}
+	req, err := http.NewRequest("GET", `https://registry.npmjs.org/`+pkgName, nil)
 	if err != nil {
 		return "", err
 	}
@@ -291,7 +294,17 @@ func (p *localPackage) Install(ctx context.Context, to string) error {
 		i++
 	}
 	nodeDir := filepath.Join(to, "node_modules", manifest.Name)
-	return copyFiles(pkgPath, nodeDir, files...)
+	if err := copyFiles(pkgPath, nodeDir, files...); err != nil {
+		return err
+	}
+	eg := new(errgroup.Group)
+	for dep, version := range manifest.Dependencies {
+		pkgname := fmt.Sprintf("%s@%s", dep, version)
+		eg.Go(func() error {
+			return install(ctx, to, pkgname)
+		})
+	}
+	return eg.Wait()
 }
 
 func copyFiles(from, to string, files ...string) error {
@@ -326,10 +339,11 @@ func copyFile(src, dst string) error {
 }
 
 type localManifest struct {
-	Name    string   `json:"name,omitempty"`
-	Main    string   `json:"main,omitempty"`
-	Browser string   `json:"browser,omitempty"`
-	Files   []string `json:"files,omitempty"`
+	Name         string            `json:"name,omitempty"`
+	Main         string            `json:"main,omitempty"`
+	Browser      string            `json:"browser,omitempty"`
+	Files        []string          `json:"files,omitempty"`
+	Dependencies map[string]string `json:"dependencies,omitempty"`
 }
 
 func rootless(fpath string) string {
