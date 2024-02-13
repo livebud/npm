@@ -1,3 +1,8 @@
+# 0.0.4 / 2024-02-12
+
+- support installing deps of deps
+- support installing with semver syntax
+
 # 0.0.3 / 2024-02-12
 
 - add 'npm pack'-like support for installing from local directories
