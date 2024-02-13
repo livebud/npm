@@ -116,3 +116,14 @@ func TestInstallLocal(t *testing.T) {
 	notExists(t, filepath.Join(dir, "node_modules", "bud", "node_modules"))
 	notExists(t, filepath.Join(dir, "node_modules", "bud", ".gitignore"))
 }
+
+func TestDepOfDep(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	err := npm.Install(ctx, dir, "preact-render-to-string@6.3.1")
+	is.NoErr(err)
+	exists(t, filepath.Join(dir, "node_modules", "preact-render-to-string", "package.json"))
+	// pretty-format is a dependency of preact-render-to-string
+	exists(t, filepath.Join(dir, "node_modules", "pretty-format", "package.json"))
+}

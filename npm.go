@@ -12,8 +12,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/matthewmueller/glob"
 	"golang.org/x/sync/errgroup"
 )
@@ -40,11 +42,11 @@ func install(ctx context.Context, dir string, pkgname string) error {
 	return nil
 }
 
-type Installable interface {
+type installable interface {
 	Install(ctx context.Context, to string) error
 }
 
-func resolvePackage(pkgname string) (Installable, error) {
+func resolvePackage(pkgname string) (installable, error) {
 	if isLocal(pkgname) {
 		return &localPackage{Path: pkgname}, nil
 	}
@@ -60,8 +62,13 @@ func resolvePackage(pkgname string) (Installable, error) {
 	}
 	if version == "" {
 		return nil, fmt.Errorf("npm: unable to install %[1]s because it's missing the version (e.g. %[1]s@1.0.0)", pkgname)
-	} else if version == "latest" {
-		return nil, fmt.Errorf("npm: unable to install %[1]s because tagged versions aren't supported yet", pkgname)
+	}
+	// else if version == "latest" {
+	// 	return nil, fmt.Errorf("npm: unable to install %[1]s because tagged versions aren't supported yet", pkgname)
+	// }
+	version, err := resolveVersion(scope, name, version)
+	if err != nil {
+		return nil, err
 	}
 	return &remotePackage{
 		Scope:   scope,
@@ -76,7 +83,7 @@ type remotePackage struct {
 	Version string `json:"version,omitempty"`
 }
 
-var _ Installable = (*remotePackage)(nil)
+var _ installable = (*remotePackage)(nil)
 
 func (p *remotePackage) url() string {
 	if p.Scope == "" {
@@ -141,7 +148,73 @@ func (p *remotePackage) Install(ctx context.Context, to string) error {
 			return err
 		}
 	}
-	return nil
+	// Install dependencies
+	manifestPath := filepath.Join(p.dir(to), "package.json")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	var pkg struct {
+		Dependencies map[string]string `json:"dependencies,omitempty"`
+	}
+	if err := json.Unmarshal(manifest, &pkg); err != nil {
+		return err
+	}
+	eg := new(errgroup.Group)
+	for dep, version := range pkg.Dependencies {
+		pkgname := fmt.Sprintf("%s@%s", dep, version)
+		eg.Go(func() error {
+			return install(ctx, to, pkgname)
+		})
+	}
+	return eg.Wait()
+}
+
+func resolveVersion(scope, name, version string) (string, error) {
+	if version == "latest" {
+		return "latest", nil
+	}
+	req, err := http.NewRequest("GET", fmt.Sprintf(`https://registry.npmjs.org/%s/%s`, scope, name), nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return "", fmt.Errorf("npm: unable to resolve version for %s@%s: unexpected status code %d", name, version, res.StatusCode)
+	}
+	var pkg struct {
+		Versions map[string]struct{} `json:"versions,omitempty"`
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(body, &pkg); err != nil {
+		return "", err
+	}
+	var versions semver.Collection
+	for version := range pkg.Versions {
+		v, err := semver.NewVersion(version)
+		if err != nil {
+			continue
+		}
+		versions = append(versions, v)
+	}
+	sort.Sort(versions)
+	constraint, err := semver.NewConstraint(version)
+	if err != nil {
+		return "", fmt.Errorf("npm: unable to resolve version for %s@%s: %w", name, version, err)
+	}
+	for i := len(versions) - 1; i >= 0; i-- {
+		if constraint.Check(versions[i]) {
+			return versions[i].String(), nil
+		}
+	}
+	return "", fmt.Errorf("npm: unable to resolve version for %s@%s: no matching version found", name, version)
 }
 
 type localPackage struct {
