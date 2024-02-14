@@ -2,6 +2,7 @@ package npm_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -139,4 +140,41 @@ func TestScoped(t *testing.T) {
 	err := npm.Install(ctx, dir, "@lukeed/uuid@^2.0.1")
 	is.NoErr(err)
 	exists(t, filepath.Join(dir, "node_modules", "@lukeed", "uuid", "package.json"))
+}
+
+func TestConflictingWritesOk(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	local := t.TempDir()
+	files := map[string]string{
+		"main.ts":    `export const main = "main"`,
+		"browser.ts": `export const browser = "browser"`,
+		"package.json": `{
+			"name": "bud",
+			"main": "./main.ts",
+			"browser": "./browser.ts",
+			"dependencies": {
+				"preact": "10.19.4",
+				"preact-render-to-string": "6.3.1",
+				"@lukeed/uuid": "^2.0.1"
+			}
+		}`,
+	}
+	is.NoErr(writeFiles(local, files))
+	ctx := context.Background()
+	err := npm.Install(ctx, dir,
+		local,
+		"preact@10.19.4",
+		"preact-render-to-string@6.3.1",
+		"@lukeed/uuid@^2.0.1",
+	)
+	is.NoErr(err)
+	manifest := filepath.Join(dir, "node_modules", "preact", "package.json")
+	exists(t, manifest)
+	code, err := os.ReadFile(manifest)
+	is.NoErr(err)
+	var pkg struct {
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	is.NoErr(json.Unmarshal(code, &pkg))
 }
