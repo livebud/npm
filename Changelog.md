@@ -1,3 +1,8 @@
+# 0.0.5 / 2024-02-14
+
+- fixed a race condition between competing packages with the same name writing concurrently to the filesystem
+- added more error handling
+
 # 0.0.4 / 2024-02-12
 
 - support installing deps of deps
