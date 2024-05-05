@@ -1,3 +1,8 @@
+# 0.0.6 / 2024-05-04
+
+- install from a package.json
+- support `exports` and `imports` in `package.json`
+
 # 0.0.5 / 2024-02-14
 
 - fixed a race condition between competing packages with the same name writing concurrently to the filesystem
