@@ -178,3 +178,108 @@ func TestConflictingWritesOk(t *testing.T) {
 	}
 	is.NoErr(json.Unmarshal(code, &pkg))
 }
+
+func TestLocalRelative(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	files := map[string]string{
+		"local/main.ts":    `export const main = "main"`,
+		"local/browser.ts": `export const browser = "browser"`,
+		"local/package.json": `{
+			"name": "bud",
+			"main": "./main.ts",
+			"browser": "./browser.ts",
+			"dependencies": {
+				"preact": "10.19.4",
+				"preact-render-to-string": "6.3.1",
+				"@lukeed/uuid": "^2.0.1"
+			}
+		}`,
+	}
+	is.NoErr(writeFiles(dir, files))
+	ctx := context.Background()
+	err := npm.Install(ctx, dir,
+		"./local",
+		"preact-render-to-string@6.3.1",
+		"@lukeed/uuid@^2.0.1",
+	)
+	is.NoErr(err)
+	manifest := filepath.Join(dir, "node_modules", "preact", "package.json")
+	exists(t, manifest)
+	code, err := os.ReadFile(manifest)
+	is.NoErr(err)
+	var pkg struct {
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	is.NoErr(json.Unmarshal(code, &pkg))
+}
+
+func TestImportExports(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	files := map[string]string{
+		"local/main.ts":    `export const main = "main"`,
+		"local/browser.ts": `export const browser = "browser"`,
+		"local/index.mjs":  `export const index = "index"`,
+		"local/index.cjs":  `export const index = "index"`,
+		"local/index.djs":  `export const index = "indexdjs"`,
+		"local/package.json": `{
+			"name": "bud",
+			"main": "./main.ts",
+			"browser": "./browser.ts",
+			"dependencies": {
+				"preact": "10.19.4",
+				"preact-render-to-string": "6.3.1",
+				"@lukeed/uuid": "^2.0.1"
+			},
+			"exports": {
+				".": "index.djs"
+			},
+			"imports": {
+				".": {
+					"import": "./index.mjs",
+					"commonjs": "./index.cjs"
+				}
+			}
+		}`,
+	}
+	is.NoErr(writeFiles(dir, files))
+	ctx := context.Background()
+	err := npm.Install(ctx, dir,
+		"./local",
+		"preact-render-to-string@6.3.1",
+		"@lukeed/uuid@^2.0.1",
+	)
+	is.NoErr(err)
+	code, err := os.ReadFile(filepath.Join(dir, "node_modules", "bud", "index.mjs"))
+	is.NoErr(err)
+	is.Equal(string(code), files["local/index.mjs"])
+	code, err = os.ReadFile(filepath.Join(dir, "node_modules", "bud", "index.cjs"))
+	is.NoErr(err)
+	is.Equal(string(code), files["local/index.cjs"])
+	code, err = os.ReadFile(filepath.Join(dir, "node_modules", "bud", "index.djs"))
+	is.NoErr(err)
+	is.Equal(string(code), files["local/index.djs"])
+}
+
+func TestInstallFromPackageJson(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	files := map[string]string{
+		"package.json": `{
+			"dependencies": {
+				"preact": "10.19.4",
+				"preact-render-to-string": "6.3.1",
+				"@lukeed/uuid": "^2.0.1"
+			}
+		}`,
+	}
+	is.NoErr(writeFiles(dir, files))
+	ctx := context.Background()
+	err := npm.Install(ctx, dir)
+	is.NoErr(err)
+	exists(t, filepath.Join(dir, "package.json"))
+	exists(t, filepath.Join(dir, "node_modules", "preact", "package.json"))
+	exists(t, filepath.Join(dir, "node_modules", "preact-render-to-string", "package.json"))
+	exists(t, filepath.Join(dir, "node_modules", "@lukeed", "uuid", "package.json"))
+}

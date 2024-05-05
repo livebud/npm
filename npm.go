@@ -24,6 +24,29 @@ import (
 func Install(ctx context.Context, dir string, packages ...string) error {
 	eg := new(errgroup.Group)
 	sg := new(singleflight.Group)
+
+	if len(packages) == 0 {
+		manifestPath := filepath.Join(dir, "package.json")
+		manifest, err := os.ReadFile(manifestPath)
+		if err != nil {
+			return fmt.Errorf("unable to read package.json: %w", err)
+		}
+		var pkg struct {
+			Dependencies map[string]string `json:"dependencies,omitempty"`
+		}
+		if err := json.Unmarshal(manifest, &pkg); err != nil {
+			return fmt.Errorf("unable to unmarshal package.json: %w", err)
+		}
+		for dep, version := range pkg.Dependencies {
+			if isLocal(version) || isAbsolute(version) {
+				packages = append(packages, version)
+				continue
+			}
+			pkgname := fmt.Sprintf("%s@%s", dep, version)
+			packages = append(packages, pkgname)
+		}
+	}
+
 	for _, pkg := range packages {
 		pkg := pkg
 		eg.Go(func() error {
@@ -34,7 +57,7 @@ func Install(ctx context.Context, dir string, packages ...string) error {
 }
 
 func install(ctx context.Context, sg *singleflight.Group, dir string, pkgname string) error {
-	pkg, err := resolvePackage(pkgname)
+	pkg, err := resolvePackage(dir, pkgname)
 	if err != nil {
 		return err
 	}
@@ -54,8 +77,10 @@ type installable interface {
 	Install(ctx context.Context, sg *singleflight.Group, to string) error
 }
 
-func resolvePackage(pkgname string) (installable, error) {
+func resolvePackage(dir, pkgname string) (installable, error) {
 	if isLocal(pkgname) {
+		return readLocalPackage(filepath.Join(dir, pkgname))
+	} else if isAbsolute(pkgname) {
 		return readLocalPackage(pkgname)
 	}
 	index := strings.LastIndex(pkgname, "@")
@@ -238,8 +263,8 @@ func resolveVersion(scope, name, version string) (string, error) {
 	return "", fmt.Errorf("unable to resolve version for %s@%s: no matching version found", name, version)
 }
 
-func readLocalPackage(dir string) (*localPackage, error) {
-	manifestPath := filepath.Join(dir, "package.json")
+func readLocalPackage(pkgdir string) (*localPackage, error) {
+	manifestPath := filepath.Join(pkgdir, "package.json")
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("unable to read package.json: %w", err)
@@ -252,7 +277,7 @@ func readLocalPackage(dir string) (*localPackage, error) {
 	}
 	return &localPackage{
 		Name: pkg.Name,
-		Path: dir,
+		Path: pkgdir,
 	}, nil
 }
 
@@ -292,7 +317,7 @@ func (p *localPackage) Install(ctx context.Context, sg *singleflight.Group, to s
 	if err != nil {
 		return fmt.Errorf("unable to read %s for %s: %w", manifestName, p.Path, err)
 	}
-	var manifest localManifest
+	var manifest Manifest
 	if err := json.Unmarshal(manifestJson, &manifest); err != nil {
 		return fmt.Errorf("unable to unmarshal %s for %s: %w", manifestName, p.Path, err)
 	}
@@ -329,6 +354,14 @@ func (p *localPackage) Install(ctx context.Context, sg *singleflight.Group, to s
 		if err != nil {
 			return err
 		}
+	}
+	for _, imp := range manifest.Imports {
+		for _, p := range imp {
+			fileMap[filepath.Clean(p)] = true
+		}
+	}
+	for _, p := range manifest.Exports {
+		fileMap[filepath.Clean(p)] = true
 	}
 	files := make([]string, len(fileMap))
 	i := 0
@@ -381,11 +414,14 @@ func copyFile(src, dst string) error {
 	return nil
 }
 
-type localManifest struct {
-	Name         string            `json:"name,omitempty"`
-	Main         string            `json:"main,omitempty"`
-	Browser      string            `json:"browser,omitempty"`
-	Files        []string          `json:"files,omitempty"`
+type Manifest struct {
+	Name    string                       `json:"name,omitempty"`
+	Main    string                       `json:"main,omitempty"`
+	Browser string                       `json:"browser,omitempty"`
+	Files   []string                     `json:"files,omitempty"`
+	Imports map[string]map[string]string `json:"imports,omitempty"`
+	// TODO: this can also be a string or list
+	Exports      map[string]string `json:"exports,omitempty"`
 	Dependencies map[string]string `json:"dependencies,omitempty"`
 }
 
@@ -395,7 +431,11 @@ func rootless(fpath string) string {
 }
 
 func isLocal(pkgname string) bool {
-	return strings.HasPrefix(pkgname, ".") || strings.HasPrefix(pkgname, "/")
+	return strings.HasPrefix(pkgname, ".")
+}
+
+func isAbsolute(pkgname string) bool {
+	return strings.HasPrefix(pkgname, "/")
 }
 
 func hiddenPath(p string) bool {
