@@ -1,3 +1,8 @@
+# 0.0.7 / 2024-05-05
+
+- add an npm.Version command for resolving versions
+- use latest gh binary
+
 # 0.0.6 / 2024-05-04
 
 - install from a package.json
