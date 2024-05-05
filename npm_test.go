@@ -283,3 +283,19 @@ func TestInstallFromPackageJson(t *testing.T) {
 	exists(t, filepath.Join(dir, "node_modules", "preact-render-to-string", "package.json"))
 	exists(t, filepath.Join(dir, "node_modules", "@lukeed", "uuid", "package.json"))
 }
+
+func TestLatest(t *testing.T) {
+	is := is.New(t)
+	ctx := context.Background()
+	version, err := npm.Version(ctx, "subs", "*")
+	is.NoErr(err)
+	is.Equal(version, "1.0.2")
+}
+
+func TestVersion(t *testing.T) {
+	is := is.New(t)
+	ctx := context.Background()
+	version, err := npm.Version(ctx, "subs", "<1")
+	is.NoErr(err)
+	is.Equal(version, "0.0.1")
+}

@@ -21,6 +21,17 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+type Manifest struct {
+	Name    string                       `json:"name,omitempty"`
+	Main    string                       `json:"main,omitempty"`
+	Browser string                       `json:"browser,omitempty"`
+	Files   []string                     `json:"files,omitempty"`
+	Imports map[string]map[string]string `json:"imports,omitempty"`
+	// TODO: this can also be a string or list
+	Exports      map[string]string `json:"exports,omitempty"`
+	Dependencies map[string]string `json:"dependencies,omitempty"`
+}
+
 func Install(ctx context.Context, dir string, packages ...string) error {
 	eg := new(errgroup.Group)
 	sg := new(singleflight.Group)
@@ -77,6 +88,24 @@ type installable interface {
 	Install(ctx context.Context, sg *singleflight.Group, to string) error
 }
 
+func parseScope(pkgname string) (scope string, name string) {
+	index := strings.LastIndex(pkgname, "/")
+	if index == -1 {
+		return "", pkgname
+	}
+	return pkgname[:index], pkgname[index+1:]
+}
+
+// Version resolves the version of a package. To get the latest you can do
+// `version, err := npm.Version(ctx, "preact", "*")`.
+func Version(ctx context.Context, pkgname, constraint string) (string, error) {
+	version, err := resolveVersion(pkgname, constraint)
+	if err != nil {
+		return "", err
+	}
+	return version, nil
+}
+
 func resolvePackage(dir, pkgname string) (installable, error) {
 	if isLocal(pkgname) {
 		return readLocalPackage(filepath.Join(dir, pkgname))
@@ -87,18 +116,14 @@ func resolvePackage(dir, pkgname string) (installable, error) {
 	if index == -1 {
 		return nil, fmt.Errorf("npm: unable to install %[1]s because it's missing the version (e.g. %[1]s@1.0.0)", pkgname)
 	}
-	name, version := pkgname[:index], pkgname[index+1:]
-	scope := ""
-	index = strings.LastIndex(name, "/")
-	if index != -1 {
-		scope, name = name[:index], name[index+1:]
-	}
+	pkgName, version := pkgname[:index], pkgname[index+1:]
+	scope, name := parseScope(pkgName)
 	if version == "" {
 		return nil, fmt.Errorf("npm: unable to install %[1]s because it's missing the version (e.g. %[1]s@1.0.0)", pkgname)
 	} else if version == "latest" {
 		return nil, fmt.Errorf("npm: unable to install %[1]s because tagged versions aren't supported yet", pkgname)
 	}
-	version, err := resolveVersion(scope, name, version)
+	version, err := resolveVersion(pkgName, version)
 	if err != nil {
 		return nil, err
 	}
@@ -211,35 +236,28 @@ func (p *remotePackage) Install(ctx context.Context, sg *singleflight.Group, to 
 	return eg.Wait()
 }
 
-func resolveVersion(scope, name, version string) (string, error) {
-	if version == "latest" {
-		return "latest", nil
-	}
-	pkgName := name
-	if scope != "" {
-		pkgName = fmt.Sprintf("%s/%s", scope, name)
-	}
+func resolveVersions(pkgName string) (semver.Collection, error) {
 	req, err := http.NewRequest(http.MethodGet, `https://registry.npmjs.org/`+pkgName, nil)
 	if err != nil {
-		return "", fmt.Errorf("unable to create request to resolve version for %s@%s: %w", name, version, err)
+		return nil, fmt.Errorf("unable to create request to resolve version for %s: %w", pkgName, err)
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("unable to preform request to resolve version for %s@%s: %w", name, version, err)
+		return nil, fmt.Errorf("unable to preform request to resolve version for %s: %w", pkgName, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return "", fmt.Errorf("unexpected status code while resolving version for %s@%s: %d", name, version, res.StatusCode)
+		return nil, fmt.Errorf("unexpected status code while resolving version for %s: %d", pkgName, res.StatusCode)
 	}
 	var pkg struct {
 		Versions map[string]struct{} `json:"versions,omitempty"`
 	}
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return "", fmt.Errorf("unable to read body while resolving version for %s@%s: %w", name, version, err)
+		return nil, fmt.Errorf("unable to read body while resolving version for %s: %w", pkgName, err)
 	}
 	if err := json.Unmarshal(body, &pkg); err != nil {
-		return "", fmt.Errorf("unable to unmarshal body while resolving version for %s@%s: %w", name, version, err)
+		return nil, fmt.Errorf("unable to unmarshal body while resolving version for %s: %w", pkgName, err)
 	}
 	var versions semver.Collection
 	for version := range pkg.Versions {
@@ -251,16 +269,24 @@ func resolveVersion(scope, name, version string) (string, error) {
 		versions = append(versions, v)
 	}
 	sort.Sort(versions)
-	constraint, err := semver.NewConstraint(version)
+	return versions, nil
+}
+
+func resolveVersion(pkgName, constraint string) (string, error) {
+	versions, err := resolveVersions(pkgName)
 	if err != nil {
-		return "", fmt.Errorf("unable to create a new constraint for %s@%s: %w", name, version, err)
+		return "", fmt.Errorf("unable to resolve versions for %s: %w", pkgName, err)
+	}
+	checker, err := semver.NewConstraint(constraint)
+	if err != nil {
+		return "", fmt.Errorf("unable to create a new constraint for %s@%s: %w", pkgName, constraint, err)
 	}
 	for i := len(versions) - 1; i >= 0; i-- {
-		if constraint.Check(versions[i]) {
+		if checker.Check(versions[i]) {
 			return versions[i].String(), nil
 		}
 	}
-	return "", fmt.Errorf("unable to resolve version for %s@%s: no matching version found", name, version)
+	return "", fmt.Errorf("unable to resolve version for %s@%s: no matching version found", pkgName, constraint)
 }
 
 func readLocalPackage(pkgdir string) (*localPackage, error) {
@@ -412,17 +438,6 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("unable to copy %s to %s: %w", src, dst, err)
 	}
 	return nil
-}
-
-type Manifest struct {
-	Name    string                       `json:"name,omitempty"`
-	Main    string                       `json:"main,omitempty"`
-	Browser string                       `json:"browser,omitempty"`
-	Files   []string                     `json:"files,omitempty"`
-	Imports map[string]map[string]string `json:"imports,omitempty"`
-	// TODO: this can also be a string or list
-	Exports      map[string]string `json:"exports,omitempty"`
-	Dependencies map[string]string `json:"dependencies,omitempty"`
 }
 
 func rootless(fpath string) string {
