@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -356,30 +355,19 @@ func (p *localPackage) Install(ctx context.Context, sg *singleflight.Group, to s
 	if manifest.Browser != "" {
 		fileMap[filepath.Clean(manifest.Browser)] = true
 	}
-	for _, file := range manifest.Files {
-		err := glob.Walk(filepath.Join(pkgPath, file+"**"), func(path string, de fs.DirEntry, err error) error {
-			if err != nil {
-				return fmt.Errorf("error while walking %s to install local package: %w", path, err)
-			}
-			name := de.Name()
-			if hiddenPath(name) || ignorePaths[name] {
-				if de.IsDir() {
-					return fs.SkipDir
-				}
-				return nil
-			} else if de.IsDir() {
-				return nil
-			}
-			rel, err := filepath.Rel(pkgPath, path)
-			if err != nil {
-				return fmt.Errorf("unable to get relative path for %s to install local package: %w", path, err)
-			}
-			fileMap[rel] = true
-			return nil
-		})
+	for err, path := range glob.Walk(pkgPath, manifest.Files...) {
 		if err != nil {
-			return err
+			return fmt.Errorf("error while walking %s to install local package: %w", path, err)
 		}
+		name := filepath.Base(path)
+		if hiddenPath(name) || ignorePaths[name] {
+			continue
+		}
+		rel, err := filepath.Rel(pkgPath, path)
+		if err != nil {
+			return fmt.Errorf("unable to get relative path for %s to install local package: %w", path, err)
+		}
+		fileMap[rel] = true
 	}
 	for _, imp := range manifest.Imports {
 		for _, p := range imp {
@@ -412,7 +400,6 @@ func (p *localPackage) Install(ctx context.Context, sg *singleflight.Group, to s
 func copyFiles(from, to string, files ...string) error {
 	eg := new(errgroup.Group)
 	for _, file := range files {
-		file := file
 		eg.Go(func() error {
 			return copyFile(filepath.Join(from, file), filepath.Join(to, file))
 		})
@@ -426,6 +413,13 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("unable to open %s to copy: %w", src, err)
 	}
 	defer srcFile.Close()
+	stat, err := srcFile.Stat()
+	if err != nil {
+		return fmt.Errorf("unable to stat %s to copy: %w", src, err)
+	}
+	if stat.IsDir() {
+		return copyDir(src, dst)
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return fmt.Errorf("unable to make directory for %s to copy: %w", dst, err)
 	}
@@ -438,6 +432,26 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("unable to copy %s to %s: %w", src, dst, err)
 	}
 	return nil
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if hiddenPath(rel) || ignorePaths[filepath.Base(rel)] {
+			return nil
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		return copyFile(path, target)
+	})
 }
 
 func rootless(fpath string) string {
