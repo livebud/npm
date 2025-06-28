@@ -1,3 +1,7 @@
+# 0.1.0 / 2025-06-28
+
+- bump glob, go and adjust file copying implementation
+
 # 0.0.7 / 2024-05-05
 
 - add an npm.Version command for resolving versions
