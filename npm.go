@@ -58,7 +58,6 @@ func Install(ctx context.Context, dir string, packages ...string) error {
 	}
 
 	for _, pkg := range packages {
-		pkg := pkg
 		eg.Go(func() error {
 			return install(ctx, sg, dir, pkg)
 		})
@@ -73,7 +72,7 @@ func install(ctx context.Context, sg *singleflight.Group, dir string, pkgname st
 	}
 	// Only install a package once
 	// TODO: this may need to get smarter to handle different versions
-	_, err, _ = sg.Do(pkg.Key(), func() (interface{}, error) {
+	_, err, _ = sg.Do(pkg.Key(), func() (any, error) {
 		if err := pkg.Install(ctx, sg, dir); err != nil {
 			return nil, fmt.Errorf("npm install %s: %w", pkgname, err)
 		}
